@@ -4,10 +4,33 @@
 #include <WiFi.h>
 #include <Wire.h>
 
+#include "SparkFunLSM6DSO.h"
+#include <cmath>
+
+LSM6DSO myIMU;
+
+float value;
+float prevValue;
+
+int pickups = 0;
 
 #define B_BUTTON_PIN 17
 #define RESET_BUTTON_PIN 15
 #define SERVO_PIN 27
+
+// from here (testing heartbeat + temp)
+#define TEMP_PIN 36 // ADC0
+#define HEARTBEAT_PIN 39 // ADC3
+
+int heart_signal;
+int beat_threshold = 2000; // maybe 500 idk
+// to here (testing heartbeat + temp)
+
+Servo myservo;
+int yellow_goal = 5;
+int yellow_pressed = 0;
+int reset_pressed = 0;
+int hit_goal = 0;
 
 const char* root_ca = \
 "-----BEGIN CERTIFICATE-----\n"\
@@ -46,19 +69,15 @@ const char* sasToken = "SharedAccessSignature sr=147HubProject.azure-devices.net
 const char* ssid = "Houri (2)";
 const char* password = "zxcvbnma";
 
-Servo myservo;
-int yellow_goal = 5;
-int yellow_pressed = 0;
 
-
-void sendButtonData(int buttonPressCount) {
+void sendData(String buttonName, int buttonPressCount) {
   HTTPClient http;
 
   String url = "https://" + String(iothubName) + 
                ".azure-devices.net/devices/" + String(deviceName) + 
                "/messages/events?api-version=2016-11-14";
 
-  String payload = "{\"buttonPressCount\": " + String(buttonPressCount) + "}";
+  String payload = "{\"" + buttonName + "\": " + String(buttonPressCount) + "}";
 
   http.begin(url, root_ca); 
   http.addHeader("Authorization", sasToken);
@@ -97,6 +116,21 @@ void setup() {
   }
   Serial.println("\nWi-Fi connected");
 
+  // for accelerometer
+
+  Wire.begin();
+  delay(10);
+  if( myIMU.begin() )
+    Serial.println("Ready.");
+  else { 
+    Serial.println("Could not connect to IMU.");
+    Serial.println("Freezing");
+  }
+
+  if( myIMU.initialize(BASIC_SETTINGS) )
+    Serial.println("Loaded Settings.");
+
+  // for heartbeat sensor
 
 
 }
@@ -107,22 +141,63 @@ void loop() {
   int resetbuttonState = digitalRead(RESET_BUTTON_PIN);
   if (yellowbuttonState == LOW) {
     ++yellow_pressed;
-    Serial.print("button is LOW\n");
-    delay(1000);
+    sendData("yellow_button_pressed", yellow_pressed);
   }
   
-  if (yellow_pressed > yellow_goal)
+  if (yellow_pressed = yellow_goal) { // changed from > to = so multiple presses after goal reached dont increment hit_goal DOUBLE CHECK HERE PLS
+    ++hit_goal;
     yellow_pressed = yellow_goal;
+    sendData("hit_goal_count", hit_goal);
+  }
   
   if (resetbuttonState == LOW) {
+    ++reset_pressed;
     yellow_pressed = 0;
+    sendData("reset_button_pressed", reset_pressed);
   }
+
+  prevValue = value;
+  value = myIMU.readFloatAccelX();
+
+  Serial.println("\nvalue: ");
+  Serial.println(value);
+
+  if ((prevValue - value) > .4) {
+    pickups++;
+    sendData("number_of_pickups", pickups);
+  }
+
+  Serial.println("Number of pickups: ");
+  Serial.println(pickups);
 
   int servoNum = map(yellow_pressed, 0, yellow_goal, 0, 179);
   myservo.write(servoNum);
   Serial.print(servoNum);
   Serial.print('\n');
 
-  sendButtonData(yellow_pressed);
-  delay(2000);
+
+  // heatbeat + temp code here:
+  heart_signal = analogRead(HEARTBEAT_PIN);
+  Serial.println(heart_signal);
+  if (heart_signal > beat_threshold)
+    Serial.println("BUDUMP"); // up
+  else
+    Serial.println("------"); // down
+
+  // SEND DATA?
+  // sendData("heart_signal", heart_signal);
+
+  int temp_reading = analogRead(TEMP_PIN);
+
+  // TO ADJUST BELOW (MATH PORTION OF TEMP)
+  float voltage = temp_reading * 5.0;
+  voltage /= 1024.0; 
+  Serial.print(voltage); Serial.println(" volts");
+
+  float temperatureC = (voltage - 0.5) * 100 ;
+  Serial.print(temperatureC); Serial.println(" degrees C");
+ 
+  float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
+  Serial.print(temperatureF); Serial.println(" degrees F");
+
 }
