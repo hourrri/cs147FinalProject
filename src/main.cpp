@@ -17,20 +17,25 @@ int pickups = 0;
 #define B_BUTTON_PIN 17
 #define RESET_BUTTON_PIN 15
 #define SERVO_PIN 27
+#define TIMER_BUTTON_PIN 13
 
 // from here (testing heartbeat + temp)
 #define TEMP_PIN 36 // ADC0
 #define HEARTBEAT_PIN 39 // ADC3
 
 int heart_signal;
+int BPM;
 int beat_threshold = 2000; // maybe 500 idk
 // to here (testing heartbeat + temp)
 
 Servo myservo;
-int yellow_goal = 5;
-int yellow_pressed = 0;
+int blue_goal = 5;
+int blue_pressed = 0;
 int reset_pressed = 0;
 int hit_goal = 0;
+double temperature = 0;
+
+bool tracked;
 
 const char* root_ca = \
 "-----BEGIN CERTIFICATE-----\n"\
@@ -62,22 +67,29 @@ const char* root_ca = \
 "q/xKzj3O9hFh/g==\n" \
 "-----END CERTIFICATE-----\n";
 
+//format for SAS token : "SharedAccessSignature sr=147HubProject.azure-devices.net%2Fdevices%2F147esp32&sig=7QEm3hsSUR9PGfl4ZekPU%2BEb6j8KwWPnDar%2B5V36vwU%3D&se=1732913822";
+
 const char* iothubName = "147HubProject";
 const char* deviceName = "147esp32";
-const char* sasToken = "SharedAccessSignature sr=147HubProject.azure-devices.net%2Fdevices%2F147esp32&sig=7QEm3hsSUR9PGfl4ZekPU%2BEb6j8KwWPnDar%2B5V36vwU%3D&se=1732913822";
+const char* sasToken = "SharedAccessSignature sr=147HubProject.azure-devices.net%2Fdevices%2F147esp32&sig=myHq5cdmUjTcLDjrmIzFhOUure5kCNtze5Hpa2TkXuM%3D&se=1733180612";
 
 const char* ssid = "Houri (2)";
 const char* password = "zxcvbnma";
 
 
-void sendData(String buttonName, int buttonPressCount) {
+void sendData(int blueButton, int resetButton, int hitGoal, int numOfPickups, int BPM, double temp) {
   HTTPClient http;
 
   String url = "https://" + String(iothubName) + 
                ".azure-devices.net/devices/" + String(deviceName) + 
                "/messages/events?api-version=2016-11-14";
 
-  String payload = "{\"" + buttonName + "\": " + String(buttonPressCount) + "}";
+  String payload ="{\"blueButton\": " + String(blueButton) + 
+                   ", \"resetButton\": " + String(resetButton) + 
+                   ", \"hitGoal\": " + String(hitGoal) + 
+                   ", \"numOfPickups\": " + String(numOfPickups) + 
+                   ", \"tempurature\": " + String(temp) + 
+                   ", \"BPM\": " + String(BPM) + "}";
 
   http.begin(url, root_ca); 
   http.addHeader("Authorization", sasToken);
@@ -105,10 +117,11 @@ void setup() {
   Serial.begin(9600);
   pinMode(B_BUTTON_PIN, INPUT_PULLUP);
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(TIMER_BUTTON_PIN, INPUT_PULLUP);
+
   myservo.attach(SERVO_PIN);
 
   Serial.print("Connecting to Wi-Fi");
-  //this could be the issue actually, lets check the code we did i just did this by myself
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -117,7 +130,6 @@ void setup() {
   Serial.println("\nWi-Fi connected");
 
   // for accelerometer
-
   Wire.begin();
   delay(10);
   if( myIMU.begin() )
@@ -131,73 +143,104 @@ void setup() {
     Serial.println("Loaded Settings.");
 
   // for heartbeat sensor
-
-
+  tracked = 0;
+  reset_pressed = 0;
 }
 
 
 void loop() {
-  int yellowbuttonState = digitalRead(B_BUTTON_PIN);
+  int bluebuttonState = digitalRead(B_BUTTON_PIN);
   int resetbuttonState = digitalRead(RESET_BUTTON_PIN);
-  if (yellowbuttonState == LOW) {
-    ++yellow_pressed;
-    sendData("yellow_button_pressed", yellow_pressed);
+  int timerbuttonState = digitalRead(TIMER_BUTTON_PIN);
+  
+
+  int BUDUMP = 0;
+
+  if (bluebuttonState == LOW ) {
+    ++blue_pressed;
+    sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
   }
   
-  if (yellow_pressed = yellow_goal) { // changed from > to = so multiple presses after goal reached dont increment hit_goal DOUBLE CHECK HERE PLS
-    ++hit_goal;
-    yellow_pressed = yellow_goal;
-    sendData("hit_goal_count", hit_goal);
+  if (blue_pressed >= blue_goal) { // changed from > to = so multiple presses after goal reached dont increment hit_goal DOUBLE CHECK HERE PLS
+    if(!tracked){
+      ++hit_goal;
+      tracked = 1;
+    }
+    blue_pressed = blue_goal;
+    sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
   }
   
   if (resetbuttonState == LOW) {
     ++reset_pressed;
-    yellow_pressed = 0;
-    sendData("reset_button_pressed", reset_pressed);
+    blue_pressed = 0;
+    tracked = 0;
+    sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
   }
+
+  if (timerbuttonState == LOW) {
+    Serial.println("------TIMER START------");
+    unsigned long starttime = millis();
+    unsigned long endtime = starttime;
+    
+    int min_temp = 0;
+    int max_temp = 0;
+    bool first_run = 1;
+    int temp_reading = 0;
+
+    while ((endtime - starttime) <= 15000) {
+      heart_signal = analogRead(HEARTBEAT_PIN);
+      Serial.println(heart_signal);
+      if (heart_signal > beat_threshold)
+        ++BUDUMP;
+      endtime = millis();
+
+      temp_reading = analogRead(TEMP_PIN);
+      if (first_run) {
+        max_temp = temp_reading;
+        min_temp = temp_reading;
+        first_run = 0;
+      }
+
+      if (temp_reading > max_temp)
+        max_temp = temp_reading;
+      if (temp_reading < min_temp)
+        min_temp = temp_reading;
+
+      delay(550);
+    }
+
+    BPM = BUDUMP * 4;
+    Serial.println("BPM: ");
+    Serial.println(BPM);
+
+    temp_reading = analogRead(TEMP_PIN);
+    temperature = map(temp_reading, min_temp, max_temp, 9700, 9900);
+    temperature = temperature / 100;
+
+    Serial.println("TEMP MAPPED: ");
+    Serial.println(temperature);
+
+    sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
+  }
+
 
   prevValue = value;
   value = myIMU.readFloatAccelX();
 
-  Serial.println("\nvalue: ");
-  Serial.println(value);
+  // Serial.println("\nvalue: ");
+  // Serial.println(value);
 
-  if ((prevValue - value) > .4) {
+  if (abs((prevValue - value)) > .2) {
     pickups++;
-    sendData("number_of_pickups", pickups);
+    sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
   }
 
-  Serial.println("Number of pickups: ");
-  Serial.println(pickups);
+  // Serial.println("Number of pickups: ");
+  // Serial.println(pickups);
 
-  int servoNum = map(yellow_pressed, 0, yellow_goal, 0, 179);
+  int servoNum = map(blue_pressed, 0, blue_goal, 0, 179);
   myservo.write(servoNum);
-  Serial.print(servoNum);
-  Serial.print('\n');
-
-
-  // heatbeat + temp code here:
-  heart_signal = analogRead(HEARTBEAT_PIN);
-  Serial.println(heart_signal);
-  if (heart_signal > beat_threshold)
-    Serial.println("BUDUMP"); // up
-  else
-    Serial.println("------"); // down
-
-  // SEND DATA?
-  // sendData("heart_signal", heart_signal);
-
-  int temp_reading = analogRead(TEMP_PIN);
-
-  // TO ADJUST BELOW (MATH PORTION OF TEMP)
-  float voltage = temp_reading * 5.0;
-  voltage /= 1024.0; 
-  Serial.print(voltage); Serial.println(" volts");
-
-  float temperatureC = (voltage - 0.5) * 100 ;
-  Serial.print(temperatureC); Serial.println(" degrees C");
- 
-  float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
-  Serial.print(temperatureF); Serial.println(" degrees F");
-
+  // Serial.print(servoNum);
+  // Serial.print('\n');
+  // sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
 }
