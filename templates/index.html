@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Visualization for Health Monitor Board</title>
+    <!-- to import the Chart.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> 
+</head>
+<body>
+    <h1>Data</h1>
+
+    <!-- to set the goal name and the hitgoal (hitgoal not implemented :( ) -->
+    <form action="/" method="POST">
+        <label for="goalName">Goal Name:</label>
+        <input type="text" id="goalName" name="goalName" required><br>
+        
+        <label for="hitGoal">Hit Goal: (not implemented, default 5)</label>
+        <input type="number" id="hitGoal" name="hitGoal" required><br>
+        
+        <button type="submit">Submit</button>
+    </form>
+
+    <!-- selector to see chart for each data points we are collecting -->
+    <h2>Visualize Data</h2>
+    <label for="dataSelect">Choose Chart to View:</label>
+    <select id="dataSelect" onchange="updateChart()">
+        <option value="blueButton">Goal Button</option>
+        <option value="resetButton">Reset Button</option>
+        <option value="hitGoal">Hit Goal</option>
+        <option value="numOfPickups">Num of Pickups</option>
+        <option value="temperature">Temperature</option>
+        <option value="BPM">BPM</option>
+    </select>
+
+    <!-- chart canvas -->
+    <canvas id="dataChart" width="400" height="200"></canvas>
+
+    <!-- table to display our data -->
+    <table border="1">
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>{{goalName}}</th>
+                <th>Reset Button</th>
+                <th>Hit Goal</th>
+                <th>Num of Pickups</th>
+                <th>Temperature</th>
+                <th>BPM</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- organized by most recent to least recent (bc reverse = true) -->
+            {% for timestamp, data in messages|dictsort(reverse=true) %}
+            <tr>
+                <td>{{timestamp}}</td>
+                <td>{{data.blueButton}}</td>
+                <td>{{data.resetButton}}</td>
+                <td>{{data.hitGoal}}</td>
+                <td>{{data.numOfPickups}}</td>
+                <td>{{data.temperature}}</td>
+                <td>{{data.BPM}}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- holds data for our chart (same data as above but not reversed) -->
+    <script>
+        const data = {
+            labels: [{% for timestamp, data in messages|dictsort(reverse=false) %}"{{ timestamp }}",{% endfor %}],
+            datasets: {
+                blueButton: [{% for timestamp, data in messages|dictsort(reverse=false) %}{{data.blueButton}},{% endfor %}],
+                resetButton: [{% for timestamp, data in messages|dictsort(reverse=false) %}{{data.resetButton}},{% endfor %}],
+                hitGoal: [{% for timestamp, data in messages|dictsort(reverse=false) %}{{data.hitGoal}},{% endfor %}],
+                numOfPickups: [{% for timestamp, data in messages|dictsort(reverse=false) %}{{data.numOfPickups}},{% endfor %}],
+                temperature: [{% for timestamp, data in messages|dictsort(reverse=false) %}{{data.temperature}},{% endfor %}],
+                BPM: [{% for timestamp, data in messages|dictsort(reverse=false) %}{{data.BPM}},{% endfor %}]
+            }
+        };
+
+        let chart;
+        
+        // takes selected chart from above and displays that chart
+        function updateChart() {
+            const selected = document.getElementById("dataSelect").value; // from the drop down
+            const context = document.getElementById("dataChart").getContext("2d");
+
+            if (chart)
+                chart.destroy();
+
+            chart = new Chart(context, {
+                type: 'line',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: selected,
+                        data: data.datasets[selected],
+                        borderColor: 'rgba(75, 190, 190, 1)',
+                        borderWidth: 2,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {title:{display: true, text: 'Timestamp'}},
+                        y: {title:{display: true, text: selected}}
+                    }
+                }
+            });
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {updateChart();});
+    </script>
+</body>
+</html>
