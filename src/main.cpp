@@ -3,8 +3,10 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <TFT_eSPI.h>
 
 #include "SparkFunLSM6DSO.h"
+#include "pitches.h"
 #include <cmath>
 
 LSM6DSO myIMU;
@@ -18,24 +20,26 @@ int pickups = 0;
 #define RESET_BUTTON_PIN 15
 #define SERVO_PIN 27
 #define TIMER_BUTTON_PIN 13
+#define BUZZER_PIN 12
 
-// from here (testing heartbeat + temp)
 #define TEMP_PIN 36 // ADC0
 #define HEARTBEAT_PIN 39 // ADC3
 
 int heart_signal;
 int BPM;
-int beat_threshold = 2000; // maybe 500 idk
-// to here (testing heartbeat + temp)
+int beat_threshold = 2000;
 
-Servo myservo;
 int blue_goal = 5;
 int blue_pressed = 0;
 int reset_pressed = 0;
 int hit_goal = 0;
 double temperature = 0;
 
+int loop_counter = 0;
 bool tracked;
+
+TFT_eSPI tft = TFT_eSPI();
+Servo myservo;
 
 const char* root_ca = \
 "-----BEGIN CERTIFICATE-----\n"\
@@ -67,16 +71,23 @@ const char* root_ca = \
 "q/xKzj3O9hFh/g==\n" \
 "-----END CERTIFICATE-----\n";
 
-//format for SAS token : "SharedAccessSignature sr=147HubProject.azure-devices.net%2Fdevices%2F147esp32&sig=7QEm3hsSUR9PGfl4ZekPU%2BEb6j8KwWPnDar%2B5V36vwU%3D&se=1732913822";
+// format for SAS token : "SharedAccessSignature sr=147HubProject.azure-devices.net%2Fdevices%2F147esp32&sig=7QEm3hsSUR9PGfl4ZekPU%2BEb6j8KwWPnDar%2B5V36vwU%3D&se=1732913822";
 
 const char* iothubName = "147HubProject";
 const char* deviceName = "147esp32";
-const char* sasToken = "SharedAccessSignature sr=147HubProject.azure-devices.net%2Fdevices%2F147esp32&sig=myHq5cdmUjTcLDjrmIzFhOUure5kCNtze5Hpa2TkXuM%3D&se=1733180612";
-
-const char* ssid = "Houri (2)";
-const char* password = "zxcvbnma";
+const char* sasToken = "SharedAccessSignature sr=147HubProject.azure-devices.net%2Fdevices%2F147esp32&sig=OnTJKeGslpJca0nIgVHigw1PWqSrAIf2MfzUxnvPJVo%3D&se=600001733526189";
 
 
+// Connect to hotspot/internet
+// ssid = network name
+// password = network password 
+
+// const char* ssid = "Houri (2)";
+// const char* password = "zxcvbnma";
+const char* ssid = "erin";
+const char* password = "calalang";
+
+// sends data to azure
 void sendData(int blueButton, int resetButton, int hitGoal, int numOfPickups, int BPM, double temp) {
   HTTPClient http;
 
@@ -115,12 +126,14 @@ void sendData(int blueButton, int resetButton, int hitGoal, int numOfPickups, in
 
 void setup() {
   Serial.begin(9600);
+
   pinMode(B_BUTTON_PIN, INPUT_PULLUP);
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
   pinMode(TIMER_BUTTON_PIN, INPUT_PULLUP);
 
   myservo.attach(SERVO_PIN);
 
+  // WIFI Setup
   Serial.print("Connecting to Wi-Fi");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -129,7 +142,7 @@ void setup() {
   }
   Serial.println("\nWi-Fi connected");
 
-  // for accelerometer
+  // Accelerometer Setup
   Wire.begin();
   delay(10);
   if( myIMU.begin() )
@@ -142,42 +155,84 @@ void setup() {
   if( myIMU.initialize(BASIC_SETTINGS) )
     Serial.println("Loaded Settings.");
 
-  // for heartbeat sensor
+  // Heartbeat Sensor Setup
   tracked = 0;
   reset_pressed = 0;
+
+  // Screen Setup
+  tft.init();
+  tft.setRotation(1);
+  tft.fillScreen(TFT_BLACK);
+  tft.setCursor(0,0);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(20);
 }
 
 
 void loop() {
+  // used to track how long screen shows text
+  Serial.println(loop_counter);
+  if (loop_counter > 100) {
+    tft.setTextSize(20);
+    tft.fillRect(0, 0, 240, 135, TFT_BLACK);
+    loop_counter = 0;
+  }
+  ++loop_counter;
+
   int bluebuttonState = digitalRead(B_BUTTON_PIN);
   int resetbuttonState = digitalRead(RESET_BUTTON_PIN);
   int timerbuttonState = digitalRead(TIMER_BUTTON_PIN);
   
+  int BUDUMP = 0; // a heartbeat
 
-  int BUDUMP = 0;
+  noTone(BUZZER_PIN);
 
+  // goal button (blue) is pressed
   if (bluebuttonState == LOW ) {
     ++blue_pressed;
-    sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
-  }
-  
-  if (blue_pressed >= blue_goal) { // changed from > to = so multiple presses after goal reached dont increment hit_goal DOUBLE CHECK HERE PLS
-    if(!tracked){
-      ++hit_goal;
-      tracked = 1;
+    if (blue_pressed >= blue_goal) { 
+      if(!tracked){
+        ++hit_goal;
+        tracked = 1;
+      }
+      blue_pressed = blue_goal;
+      sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
+    } else {
+      sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
     }
-    blue_pressed = blue_goal;
-    sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
+
+    // display "Goal!" on screen to indicate blue button pressed
+    tft.setTextSize(10);
+    tft.fillRect(0, 0, 240, 135, TFT_BLACK);
+    tft.setCursor(30, 45);
+    tft.print("Goal!");
+
+    // move servo
+    int servoNum = map(blue_pressed, 0, blue_goal, 0, 179);
+    myservo.write(servoNum);
   }
   
+  // reset button (red) is pressed 
   if (resetbuttonState == LOW) {
     ++reset_pressed;
     blue_pressed = 0;
     tracked = 0;
     sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
+
+    // display "Reset!" on screen to indicate red button pressed
+    tft.setTextSize(5);
+    tft.fillRect(0, 0, 240, 135, TFT_BLACK);
+    tft.setCursor(30, 45);
+    tft.print("Reset!");
+    loop_counter = 0;
   }
 
+  // timer button (green) is pressed
   if (timerbuttonState == LOW) {
+    // play a tone to indicate start
+    tone(BUZZER_PIN, NOTE_A7, 500);
+    noTone(BUZZER_PIN);
+
     Serial.println("------TIMER START------");
     unsigned long starttime = millis();
     unsigned long endtime = starttime;
@@ -187,13 +242,23 @@ void loop() {
     bool first_run = 1;
     int temp_reading = 0;
 
+    // read temperature and heartrate for 15 seconds
     while ((endtime - starttime) <= 15000) {
+      // display seconds on screen
+      tft.setTextSize(20);
+      tft.fillRect(0, 0, 240, 135, TFT_BLACK);
+      int secondsPassed = (endtime - starttime) / 1000;
+      tft.setCursor(50, 45);
+      tft.print(secondsPassed);
+
+      // read heartrate
       heart_signal = analogRead(HEARTBEAT_PIN);
       Serial.println(heart_signal);
       if (heart_signal > beat_threshold)
         ++BUDUMP;
       endtime = millis();
 
+      // calibrate temperature sensor
       temp_reading = analogRead(TEMP_PIN);
       if (first_run) {
         max_temp = temp_reading;
@@ -209,38 +274,42 @@ void loop() {
       delay(550);
     }
 
+    // multiple heartbeat by 4 so we can get BPM
     BPM = BUDUMP * 4;
     Serial.println("BPM: ");
     Serial.println(BPM);
 
+    // take temperature
     temp_reading = analogRead(TEMP_PIN);
     temperature = map(temp_reading, min_temp, max_temp, 9700, 9900);
     temperature = temperature / 100;
-
     Serial.println("TEMP MAPPED: ");
     Serial.println(temperature);
 
     sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
+
+    // display "Done!" on screen to indicate BPM and temperature taken
+    tft.fillRect(0, 0, 240, 135, TFT_BLACK);
+    tft.setCursor(30, 45);
+    tft.print("Done!");
+    loop_counter = 0;
+
+    // play a tone to indicate end
+    tone(BUZZER_PIN, NOTE_AS7, 500);
+    noTone(BUZZER_PIN);
   }
 
-
+  // read accelerometer value
   prevValue = value;
   value = myIMU.readFloatAccelX();
 
-  // Serial.println("\nvalue: ");
-  // Serial.println(value);
-
+  // determines if board is picked up
   if (abs((prevValue - value)) > .2) {
     pickups++;
     sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
   }
 
-  // Serial.println("Number of pickups: ");
-  // Serial.println(pickups);
-
-  int servoNum = map(blue_pressed, 0, blue_goal, 0, 179);
-  myservo.write(servoNum);
-  // Serial.print(servoNum);
-  // Serial.print('\n');
-  // sendData(blue_pressed, reset_pressed, hit_goal, pickups, BPM, temperature);
+    // move servo
+    int servoNum = map(blue_pressed, 0, blue_goal, 0, 179);
+    myservo.write(servoNum);
 }
